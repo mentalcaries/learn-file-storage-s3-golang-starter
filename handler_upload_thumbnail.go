@@ -42,7 +42,12 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	defer file.Close()
 
 	contentType := header.Header.Get("Content-Type")
+	if contentType != "image/jpeg" && contentType != "image/png"{
+		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
+		return
+	}
 	fileExt := mediaTypeToExt(contentType)
+
 
 	metadata, err := cfg.db.GetVideo(videoID)
 	if err == sql.ErrNoRows {
