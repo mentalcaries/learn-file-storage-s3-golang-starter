@@ -81,13 +81,24 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tempFile.Seek(0, io.SeekStart)
 	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not get aspect ratio", err)
 		return
 	}
 
+	processedVideo, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not process file", err)
+		return
+	}
+
+	processedFile, err := os.Open(processedVideo)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not read processed file", err)
+		return
+	}
+	defer processedFile.Close()
 
 	directory := "other/"
 	if aspectRatio == "16:9" {
@@ -97,15 +108,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		directory = "portrait/"
 	}
 
-	
-	// videoKey := directory + base64.RawURLEncoding.EncodeToString(videoRef) + "." + fileExt
 	key := getAssetPath(mimeType)
 	videoKey := path.Join(directory, key)
 
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &videoKey,
-		Body:        tempFile,
+		Body:        processedFile,
 		ContentType: &mimeType,
 	})
 
@@ -114,13 +123,23 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	updatedVideoUrl := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v", cfg.s3Bucket, cfg.s3Region, videoKey)
+	updatedVideoUrl := fmt.Sprintf("%v,%v", cfg.s3Bucket, videoKey)
 	videoMetadata.VideoURL = &updatedVideoUrl
 	err = cfg.db.UpdateVideo(videoMetadata)
 
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not update video:", err)
+		return
 	}
 
-	respondWithJSON(w, http.StatusOK, videoMetadata)
+	os.Remove(tempFile.Name())
+	os.Remove(processedVideo)
+
+	signedVideo, err := cfg.dbVideoToSignedVideo(videoMetadata)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Cannot generate signed URL", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, signedVideo)
 }
